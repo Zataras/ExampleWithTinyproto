@@ -1,5 +1,5 @@
 /*
-    Copyright 2019 (C) Alexey Dynda
+    Copyright 2019-2020 (C) Alexey Dynda
 
     This file is part of Tiny Protocol Library.
 
@@ -18,8 +18,8 @@
 */
 
 /**
- This is Tiny Half-Duplex protocol implementation for microcontrollers.
- It is built on top of Tiny Protocol (tiny_layer2.c)
+ This is Tiny Full-Duplex protocol implementation for microcontrollers.
+ It is built on top of Tiny Protocol (tiny_hdlc.c)
 
  @file
  @brief Tiny Protocol Full Duplex API
@@ -60,18 +60,18 @@ typedef struct tiny_fd_init_t_
     read_block_cb_t    read_func;
     /// user data for block read/write functions
     void             * pdata;
-    /// callback function to process incoming frames
+    /// callback function to process incoming frames. Callback is called from tiny_fd_run_rx() context.
     on_frame_cb_t      on_frame_cb;
-    /// Callback to get notification of sent frames
+    /// Callback to get notification of sent frames. Callback is called from tiny_fd_run_tx() context.
     on_frame_cb_t      on_sent_cb;
 
     /**
      * buffer to store data during full-duplex protocol operating.
-     * The size should be TBD
+     * The size should be at least size returned by tiny_fd_buffer_size_by_mtu()
      */
     void             * buffer;
 
-    /// maximum input buffer size
+    /// maximum input buffer size, see tiny_fd_buffer_size_by_mtu()
     uint16_t           buffer_size;
 
     /**
@@ -156,6 +156,21 @@ extern int tiny_fd_run_tx(tiny_fd_handle_t handle, uint16_t timeout);
  * @param timeout maximum timeout in milliseconds to perform rx operations
  */
 extern int tiny_fd_run_rx(tiny_fd_handle_t handle, uint16_t timeout);
+
+/**
+ * @brief runs rx bytes processing for specified buffer.
+ *
+ * Runs rx bytes processing for specified buffer.
+ * This is alternative method to run Full-duplex protocol for
+ * rx data. Use it, when you wish to control reading from hardware
+ * by yourself.
+ *
+ * @param handle handle of full-duplex protocol
+ * @param data pointer to data to process
+ * @param len length of data to process
+ * @return TINY_SUCCESS
+ */
+extern int tiny_fd_on_rx_data(tiny_fd_handle_t handle, const void *data, int len);
 
 /**
  * @brief Sends userdata over full-duplex protocol.

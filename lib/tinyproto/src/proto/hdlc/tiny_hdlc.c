@@ -1,3 +1,22 @@
+/*
+    Copyright 2019-2020 (C) Alexey Dynda
+
+    This file is part of Tiny Protocol Library.
+
+    Protocol Library is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Lesser General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Protocol Library is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public License
+    along with Protocol Library.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #include "tiny_hdlc.h"
 #include "proto/crc/crc.h"
 #include "proto/hal/tiny_debug.h"
@@ -15,6 +34,7 @@
 #endif
 
 #define FLAG_SEQUENCE            0x7E
+#define FILL_BYTE                0xFF
 #define TINY_ESCAPE_CHAR         0x7D
 #define TINY_ESCAPE_BIT          0x20
 
@@ -32,6 +52,7 @@ static int hdlc_read_end( hdlc_handle_t handle, const uint8_t *data, int len );
 
 static int hdlc_send_start( hdlc_handle_t handle );
 static int hdlc_send_data( hdlc_handle_t handle );
+static int hdlc_send_tx_internal( void *user_data, const void *data, int len );
 static int hdlc_send_crc( hdlc_handle_t handle );
 static int hdlc_send_end( hdlc_handle_t handle );
 
@@ -53,9 +74,14 @@ hdlc_handle_t hdlc_init( hdlc_struct_t *hdlc_info )
     {
         hdlc_info->crc_type = 0;
     }
-    tiny_mutex_create( &hdlc_info->send_mutex );
     tiny_events_create( &hdlc_info->events );
     tiny_events_set( &hdlc_info->events, TX_ACCEPT_BIT );
+    hdlc_info->tx.user_data = hdlc_info->user_data;
+    if ( !hdlc_info->send_tx )
+    {
+        hdlc_info->send_tx = hdlc_send_tx_internal;
+        hdlc_info->tx.user_data = hdlc_info;
+    }
     // Must be last
     hdlc_reset( hdlc_info );
     return hdlc_info;
@@ -68,11 +94,10 @@ int hdlc_close( hdlc_handle_t handle )
         if ( handle->on_frame_sent )
         {
             handle->on_frame_sent( handle->user_data, handle->tx.origin_data,
-                                   handle->tx.data - handle->tx.origin_data );
+                                   (int)(handle->tx.data - handle->tx.origin_data) );
         }
     }
     tiny_events_destroy( &handle->events );
-    tiny_mutex_destroy( &handle->send_mutex );
     return 0;
 }
 
@@ -84,6 +109,8 @@ void hdlc_reset( hdlc_handle_t handle )
     tiny_events_clear( &handle->events, EVENT_BIS_ALL );
     tiny_events_set( &handle->events, TX_ACCEPT_BIT );
 }
+
+////////////////////////////////////////////////////////////////////////////////////////
 
 static int hdlc_send_start( hdlc_handle_t handle )
 {
@@ -113,7 +140,7 @@ static int hdlc_send_start( hdlc_handle_t handle )
     }
 
     uint8_t buf[1] = { FLAG_SEQUENCE };
-    int result = handle->send_tx( handle->user_data, buf, sizeof(buf) );
+    int result = handle->send_tx( handle->tx.user_data, buf, sizeof(buf) );
     if ( result == 1 )
     {
         LOG(TINY_LOG_DEB, "[HDLC:%p] hdlc_send_data\n", handle);
@@ -142,7 +169,7 @@ static int hdlc_send_data( hdlc_handle_t handle )
     int result = 0;
     if ( pos )
     {
-        result = handle->send_tx( handle->user_data, handle->tx.data, pos );
+        result = handle->send_tx( handle->tx.user_data, handle->tx.data, pos );
         if ( result > 0 )
         {
             #if TINY_HDLC_DEBUG
@@ -156,8 +183,8 @@ static int hdlc_send_data( hdlc_handle_t handle )
     {
         uint8_t buf[1] = { handle->tx.escape ? ( handle->tx.data[0] ^ TINY_ESCAPE_BIT )
                                              : TINY_ESCAPE_CHAR };
-        result = handle->send_tx( handle->user_data, buf, sizeof(buf) );
-        if ( result == 1 )
+        result = handle->send_tx( handle->tx.user_data, buf, sizeof(buf) );
+        if ( result > 0 )
         {
             LOG(TINY_LOG_DEB, "[HDLC:%p] TX: %02X\n", handle, buf[0]);
             handle->tx.escape = !handle->tx.escape;
@@ -188,7 +215,7 @@ static int hdlc_send_crc( hdlc_handle_t handle )
         uint8_t byte = handle->tx.crc >> handle->tx.len;
         if ( byte != TINY_ESCAPE_CHAR && byte != FLAG_SEQUENCE )
         {
-            result = handle->send_tx( handle->user_data, &byte, sizeof(byte) );
+            result = handle->send_tx( handle->tx.user_data, &byte, sizeof(byte) );
             if ( result == 1 )
             {
                 LOG(TINY_LOG_DEB, "[HDLC:%p] TX: %02X\n", handle, byte);
@@ -198,7 +225,7 @@ static int hdlc_send_crc( hdlc_handle_t handle )
         else
         {
             byte = handle->tx.escape ? ( byte ^ TINY_ESCAPE_BIT ) : TINY_ESCAPE_CHAR;
-            result = handle->send_tx( handle->user_data, &byte, sizeof(byte) );
+            result = handle->send_tx( handle->tx.user_data, &byte, sizeof(byte) );
             if ( result == 1 )
             {
                 LOG(TINY_LOG_DEB, "[HDLC:%p] TX: %02X\n", handle, byte);
@@ -226,7 +253,7 @@ static int hdlc_send_end( hdlc_handle_t handle )
 {
     LOG(TINY_LOG_DEB, "[HDLC:%p] hdlc_send_end\n", handle);
     uint8_t buf[1] = { FLAG_SEQUENCE };
-    int result = handle->send_tx( handle->user_data, buf, sizeof(buf) );
+    int result = handle->send_tx( handle->tx.user_data, buf, sizeof(buf) );
     if ( result == 1 )
     {
         LOG(TINY_LOG_DEB, "[HDLC:%p] TX: %02X\n", handle, buf[0]);
@@ -237,7 +264,7 @@ static int hdlc_send_end( hdlc_handle_t handle )
         if ( handle->on_frame_sent )
         {
             handle->on_frame_sent( handle->user_data, handle->tx.origin_data,
-                                   handle->tx.data - handle->tx.origin_data );
+                                   (int)(handle->tx.data - handle->tx.origin_data) );
         }
         tiny_events_set( &handle->events, TX_DATA_SENT_BIT );
         tiny_events_set( &handle->events, TX_ACCEPT_BIT );
@@ -249,7 +276,7 @@ int hdlc_run_tx( hdlc_handle_t handle )
 {
     LOG(TINY_LOG_DEB, "[HDLC:%p] hdlc_run_tx\n", handle);
     int result = 0;
-    while (1)
+    for (;;)
     {
         int temp_result = handle->tx.state( handle );
         if ( temp_result <=0 )
@@ -264,6 +291,35 @@ int hdlc_run_tx( hdlc_handle_t handle )
 //        break;
     }
     return result;
+}
+
+static int hdlc_send_tx_internal( void *user_data, const void *data, int len )
+{
+    hdlc_handle_t handle = (hdlc_handle_t)user_data;
+    const uint8_t *ptr = (const uint8_t *)data;
+    int sent = 0;
+    while ( len-- && handle->tx.out_buffer_len )
+    {
+        handle->tx.out_buffer[0] = ptr[0];
+        handle->tx.out_buffer_len--;
+        sent++;
+    }
+    return sent;
+}
+
+int hdlc_get_tx_data( hdlc_handle_t handle, void *data, int len )
+{
+    handle->tx.out_buffer = (uint8_t *)data;
+    handle->tx.out_buffer_len = len;
+    while ( handle->tx.out_buffer_len )
+    {
+        int result = hdlc_run_tx( handle );
+        if ( result <= 0 )
+        {
+            break;
+        }
+    }
+    return len - handle->tx.out_buffer_len;
 }
 
 static int hdlc_run_tx_until_sent( hdlc_handle_t handle, uint32_t timeout )
@@ -322,7 +378,6 @@ int hdlc_send( hdlc_handle_t handle, const void *data, int len, uint32_t timeout
 {
     LOG(TINY_LOG_DEB, "[HDLC:%p] hdlc_send (timeout = %u)\n", handle, timeout);
     int result = TINY_SUCCESS;
-    tiny_mutex_lock( &handle->send_mutex );
     if ( data != NULL )
     {
         result = hdlc_put( handle, data, len, timeout );
@@ -350,9 +405,10 @@ int hdlc_send( hdlc_handle_t handle, const void *data, int len, uint32_t timeout
             LOG(TINY_LOG_DEB,"[HDLC:%p] hdlc_send timeout is zero, exiting\n", handle);
         }
     }
-    tiny_mutex_unlock( &handle->send_mutex );
     return result;
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////
 
 static int hdlc_read_start( hdlc_handle_t handle, const uint8_t *data, int len )
 {
@@ -362,7 +418,10 @@ static int hdlc_read_start( hdlc_handle_t handle, const uint8_t *data, int len )
     }
     if ( data[0] != FLAG_SEQUENCE )
     {
-        // TODO: Skip byte, but we received some wrong data
+        if ( data[0] != FILL_BYTE )
+        {
+            // TODO: Skip byte, but we received some wrong data
+        }
         return 1;
     }
     LOG(TINY_LOG_DEB, "[HDLC:%p] RX: %02X\n", handle, data[0]);
@@ -421,7 +480,7 @@ static int hdlc_read_end( hdlc_handle_t handle, const uint8_t *data, int len_byt
         return 0; // That's OK, we actually didn't process anything from user bytes
     }
     handle->rx.state = hdlc_read_start;
-    int len = handle->rx.data - (uint8_t *)handle->rx_buf;
+    int len = (int)(handle->rx.data - (uint8_t *)handle->rx_buf);
     if ( len > handle->rx_buf_size )
     {
         // Buffer size issue, too long packet
@@ -490,7 +549,6 @@ static int hdlc_read_end( hdlc_handle_t handle, const uint8_t *data, int len_byt
 int hdlc_run_rx( hdlc_handle_t handle, const void *data, int len, int *error )
 {
     int result = 0;
-//    do
     for (;;)
     {
         int temp_result = handle->rx.state( handle, (const uint8_t *)data, len );
@@ -509,7 +567,6 @@ int hdlc_run_rx( hdlc_handle_t handle, const void *data, int len, int *error )
         len -= temp_result;
         result += temp_result;
     }
-    // while ( handle->rx.state == hdlc_read_end );
     return result;
 }
 
@@ -544,7 +601,7 @@ int hdlc_run_rx_until_read( hdlc_handle_t handle, read_block_cb_t readcb, void *
             uint8_t bits = tiny_events_wait( &handle->events, RX_DATA_READY_BIT, EVENT_BITS_CLEAR, 0 );
             if ( bits )
             {
-                result = handle->rx.data - (uint8_t *)handle->rx_buf;
+                result = (int)(handle->rx.data - (uint8_t *)handle->rx_buf);
                 break;
             }
         }

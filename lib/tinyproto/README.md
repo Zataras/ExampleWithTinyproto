@@ -9,6 +9,7 @@
   * [Supported platforms](#supported-platforms)
   * [Easy to use](#easy-to-use)
   * [Setting up](#setting-up)
+  * [How to buid](#how-to-build)
   * [Using tiny_loopback tool](#using-tiny_loopback-tool)
   * [License](#license)
 
@@ -17,26 +18,32 @@
 ## Introduction
 
 Tiny Protocol is layer 2 protocol. It is intended to be used for the systems with
-small amount of resources. It is also can be compiled for desktop Linux system, and it can
-be built it for Windows. All you need is to implement callback for writing and
-reading bytes from communication line, and implement 2 application callback for incoming
-message event and outgoing message event. With this library you can easy communicate your Arduino with applications
-on PC and other boards. You don't need to think about data synchronization
-between points. No dynamic allocation of memory, so, it can be used on the systems with limited resources
+low resources. It is also can be compiled for desktop Linux system, and it can
+be built it for Windows. Using this library you can easy implement data transfer between 2 microcontrollers
+or between microcontroller and pc. You don't need to think about data synchronization
+between points. The library use no dynamic allocation of memory.
+TinyProto is based on RFC 1662, it implements the following frames:
+ * U-frames (SABM, UA)
+ * S-frames (REJ, RR)
+ * I-frames
 
 ## Key Features
 
+Protocols, implemented by library:
+ * hdlc framing (hdlc_xxxx API, basis for light, half-duplex and full-duplex implementations)
+ * light (tiny_light_xxxx API, simplest API to use, doesn't support confirmation)
+ * half-duplex (tiny_hd_xxxx API, lightweight implementation of protocol with frame confirmation)
+ * full-duplex (tiny_fd_xxxx true RFC 1662 implementation, supports confirmation, frames retransmissions)
+
 Main features:
- * 4 protocol variants depending on your needs (basic hdlc, light, hd and fd)
  * Error detection (basic hdlc, hd and fd variants)
    * Simple 8-bit checksum (sum of bytes)
    * FCS16 (CCITT-16)
    * FCS32 (CCITT-32)
- * Frame transfer acknowledgement (hd and fd variants)
  * Frames of maximum 32K or 2G size (limit depends on platform).
- * Low SRAM consumption.
- * Low Flash consumption (features can be disabled and enabled at compilation time)
- * No dynamic memory allocations (suitable for using on uC with limited resources or without memory manager)
+ * Low SRAM consumption (starts at 50 bytes).
+ * Low Flash consumption (starts at 1KiB, features can be disabled and enabled at compilation time)
+ * No dynamic memory allocation
  * Zero copy implementation (basic hdlc, light versions do not use copy operations)
  * Serial loopback tool for debug purposes and performance testing
 
@@ -46,7 +53,7 @@ Main features:
 
 ## Easy to use
 
-Using light variant of Tiny Protocol can look like this:
+Usage of light Tiny Protocol in C++ can look like this:
 ```.cpp
 Tiny::ProtoLight  proto;
 Tiny::Packet<256> packet;
@@ -60,7 +67,7 @@ Tiny::Packet<256> packet;
     }
 ```
 
-Example of using fd variant of Tiny Protocol is a little bit bigger, but it is still simple:
+Example of using full duplex Tiny Protocol in C++ is a little bit bigger, but it is still simple:
 ```.cpp
 Tiny::ProtoFd<FD_MIN_BUF_SIZE(64,4)>  proto;
 
@@ -79,6 +86,25 @@ void loop() {
     }
     proto.run_tx();
 }
+```
+
+## How to build
+
+### Linux
+```.txt
+make
+# === OR ===
+mkdir build
+cd build
+cmake ..
+make
+```
+
+### Windows
+```.txt
+mkdir build
+cd build
+cmake -G "Visual Studio 16 2019" -DEXAMPLES=ON ..
 ```
 
 ## Setting up
@@ -132,7 +158,7 @@ If you found any problem or have any idea, please, report to Issues section.
 
 ## License
 
-Copyright 2016-2019 (C) Alexey Dynda
+Copyright 2016-2020 (C) Alexey Dynda
 
 This file is part of Tiny Protocol Library.
 

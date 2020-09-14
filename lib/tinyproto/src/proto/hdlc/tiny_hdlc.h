@@ -1,3 +1,21 @@
+/*
+    Copyright 2019-2020 (C) Alexey Dynda
+
+    This file is part of Tiny Protocol Library.
+
+    Protocol Library is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Lesser General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Protocol Library is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public License
+    along with Protocol Library.  If not, see <http://www.gnu.org/licenses/>.
+*/
 #pragma once
 
 #include "proto/hal/tiny_types.h"
@@ -111,7 +129,6 @@ typedef struct _hdlc_handle_t
 
 #ifndef DOXYGEN_SHOULD_SKIP_THIS
     /** Parameters in DOXYGEN_SHOULD_SKIP_THIS section should not be modified by a user */
-    tiny_mutex_t send_mutex;
     tiny_events_t events;
     struct
     {
@@ -121,6 +138,9 @@ typedef struct _hdlc_handle_t
     } rx;
     struct
     {
+        void *user_data;
+        uint8_t *out_buffer;
+        int out_buffer_len;
         const uint8_t *origin_data;
         const uint8_t *data;
         int len;
@@ -165,6 +185,12 @@ void hdlc_reset( hdlc_handle_t handle );
  * passed to the function, then hdlc_run_rx() must be called later second
  * time with the pointer to and size of not processed bytes.
  *
+ * If you don't care about errors on RX line, it is allowed to ignore
+ * all error codes except TINY_ERR_FAILED, which means general failure.
+ *
+ * if hdlc_run_rx() returns 0 bytes processed, just call it once again.
+ * It is guaranteed, that at least second call will process bytes.
+ *
  * This function will return the following codes in error field:
  *   - TINY_ERR_DATA_TOO_LARGE if receiving data fails to fit incoming buffer
  *   - TINY_ERR_FAILED if generic failure happened
@@ -177,6 +203,7 @@ void hdlc_reset( hdlc_handle_t handle );
  * @param error pointer to store error code. If no error, 0 is returned.
  *        this argument can be NULL.
  * @return number of processed bytes from specified data buffer.
+ *         Never returns negative value
  */
 int hdlc_run_rx( hdlc_handle_t handle, const void *data, int len, int *error );
 
@@ -184,7 +211,7 @@ int hdlc_run_rx( hdlc_handle_t handle, const void *data, int len, int *error );
  * Runs rx cycle until full frame received.
  *
  * @param handle handle to hdlc instance
- * @param readcb callback to read bytes from channel function
+ * @param readcb callback to read bytes from channel function, cannot be NULL
  * @param user_data user data to pass to readcb callback function
  * @param timeout timeout in milliseconds to wait for new frame.
  * @return
@@ -221,6 +248,12 @@ void hdlc_set_rx_buffer( hdlc_handle_t handle, void *data, int size);
 int hdlc_run_tx( hdlc_handle_t handle );
 
 /**
+ * If hdlc protocol has some data to send it will full data with
+ *
+ */
+int hdlc_get_tx_data( hdlc_handle_t handle, void *data, int len );
+
+/**
  * Puts next frame for sending. This function is thread-safe.
  * You may call it from parallel threads.
  *
@@ -229,7 +262,7 @@ int hdlc_run_tx( hdlc_handle_t handle );
  * some tx thread, implemented by application, completes sending
  * of the frame. If timeout happens, but
  * the frame is not sent still, hdlc level rejects sending of the frame.
- * In this case the frame will be set partially, causing RX errors on
+ * In this case the frame will be sent partially, causing RX errors on
  * other side. Please use reasonable timeout.
  *
  * If multithread_mode is disabled for hdlc protocol, then
@@ -237,7 +270,7 @@ int hdlc_run_tx( hdlc_handle_t handle );
  * itself if TX line is not busy. hdlc_send() will
  * block until frame is sent or timeout. If timeout happens, but
  * the frame is not sent still, hdlc level rejects sending of the frame.
- * In this case the frame will be set partially, causing RX errors on
+ * In this case the frame will be sent partially, causing RX errors on
  * other side. Please use reasonable timeout.
  *
  * If timeout is specified as 0, hdlc_send() function will not

@@ -29,7 +29,7 @@ extern "C" {
 #include <inttypes.h>
 
 #ifndef TINY_LOG_LEVEL_DEFAULT
-#define TINY_LOG_LEVEL_DEFAULT   2
+#define TINY_LOG_LEVEL_DEFAULT   0
 #endif
 
 extern uint8_t g_tiny_log_level;

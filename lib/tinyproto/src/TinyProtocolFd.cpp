@@ -1,5 +1,5 @@
 /*
-    Copyright 2019 (C) Alexey Dynda
+    Copyright 2019-2020 (C) Alexey Dynda
 
     This file is part of Tiny Protocol Library.
 
@@ -37,6 +37,11 @@ void IProtoFd::onReceiveInternal(void *handle, uint16_t uid, uint8_t *pdata, int
     (reinterpret_cast<IProtoFd*>(handle))->onReceive(pdata, size);
 }
 
+void IProtoFd::onSendInternal(void *handle, uint16_t uid, uint8_t *pdata, int size)
+{
+    (reinterpret_cast<IProtoFd*>(handle))->onSend(pdata, size);
+}
+
 void IProtoFd::begin(write_block_cb_t writecb,
                      read_block_cb_t readcb)
 {
@@ -45,7 +50,7 @@ void IProtoFd::begin(write_block_cb_t writecb,
     init.read_func        = readcb;
     init.pdata            = this;
     init.on_frame_cb      = onReceiveInternal;
-//    init.on_sent_cb       = onTxFrame;
+    init.on_sent_cb       = onSendInternal;
     init.buffer           = m_buffer;
     init.buffer_size      = m_bufferSize;
     init.window_frames    = m_window;
@@ -76,6 +81,11 @@ int IProtoFd::write(IPacket &pkt)
 int IProtoFd::run_rx(uint16_t timeout)
 {
     return tiny_fd_run_rx( m_handle, timeout );
+}
+
+int IProtoFd::run_rx(const void *data, int len)
+{
+    return tiny_fd_on_rx_data( m_handle, data, len);
 }
 
 int IProtoFd::run_tx(uint16_t timeout)

@@ -1,5 +1,5 @@
 /*
-    Copyright 2019 (C) Alexey Dynda
+    Copyright 2019-2020 (C) Alexey Dynda
 
     This file is part of Tiny Protocol Library.
 
@@ -34,8 +34,6 @@
 #else
 #   include <string.h>
 #endif
-
-#include <memory>
 
 namespace Tiny {
 
@@ -184,6 +182,14 @@ public:
     int run_rx(uint16_t timeout = 0);
 
     /**
+     * Processes incoming rx data, specified by a user.
+     * @return TINY_SUCCESS
+     * @remark if Packet is receive during run execution
+     *         callback is called.
+     */
+    int run_rx(const void *data, int len);
+
+    /**
      * Sends data to communcation channel.
      * @return negative value in case of error
      */
@@ -238,6 +244,12 @@ public:
     void setReceiveCallback(void (*on_receive)(IPacket &pkt) = nullptr) { m_onReceive = on_receive; };
 
     /**
+     * Sets send callback for outgoing messages
+     * @param on_send user callback to process outgoing messages. The processing must be non-blocking
+     */
+    void setSendCallback(void (*on_send)(IPacket &pkt) = nullptr) { m_onSend = on_send; };
+
+    /**
      * Sets desired window size. Use this function only before begin() call.
      * window size is number of frames, which confirmation may be deferred for.
      * @param window window size, valid between 1 - 7 inclusively
@@ -265,6 +277,19 @@ protected:
         if ( m_onReceive ) m_onReceive( pkt );
     }
 
+    /**
+     * Method called by hdlc protocol upon sending next frame.
+     * Can be redefined in derived classes.
+     * @param pdata pointer to sent data
+     * @param size size of sent payload in bytes
+     */
+    virtual void onSend(uint8_t *pdata, int size)
+    {
+        IPacket pkt((char *)pdata, size);
+        pkt.m_len = size;
+        if ( m_onSend ) m_onSend( pkt );
+    }
+
 private:
     /** The variable contain protocol state */
     tiny_fd_handle_t    m_handle = nullptr;
@@ -286,9 +311,14 @@ private:
     /** Callback, when new frame is received */
     void              (*m_onReceive)(IPacket &pkt) = nullptr;
 
+    /** Callback, when new frame is sent */
+    void              (*m_onSend)(IPacket &pkt) = nullptr;
+
     /** Internal function */
     static void         onReceiveInternal(void *handle, uint16_t uid, uint8_t *pdata, int size);
 
+    /** Internal function */
+    static void         onSendInternal(void *handle, uint16_t uid, uint8_t *pdata, int size);
 };
 
 /**
@@ -315,21 +345,9 @@ public:
      * Creates instance of Full duplex protocol with dynamically allocated buffer.
      * Use this class only on powerful microcontrollers.
      */
-	ProtoFdD(int size) :
-			m_buff( new uint8_t[size] ),
-			IProtoFd(m_buff, size)
-	{}
-
-    ~ProtoFdD()
-    {
-    	if(m_buff != nullptr)
-    	{
-    		delete[] m_buff;
-    		m_buff = nullptr;
-    	}
-    }
+    ProtoFdD( int size ): IProtoFd( new uint8_t[size], size ) { }
+    ~ProtoFdD() { delete[] m_buffer; }
 private:
-    uint8_t *m_buff = nullptr;
 };
 
 /**
