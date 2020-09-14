@@ -1,5 +1,5 @@
 /*
-    Copyright 2019 (C) Alexey Dynda
+    Copyright 2019-2020 (C) Alexey Dynda
 
     This file is part of Tiny Protocol Library.
 
@@ -17,8 +17,8 @@
     along with Protocol Library.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <lib/tinyproto/tools/serial/serial_api.h>
-#include "proto/half_duplex/tiny_hd.h"
+#include <lib/tinyproto/src/proto/hal/tiny_serial.h>
+#include <lib/tinyproto/src/proto/half_duplex/tiny_hd.h>
 #include "TinyProtocol.h"
 #include <stdio.h>
 #include <time.h>
@@ -36,6 +36,7 @@ enum class protocol_type_t: uint8_t
 static hdlc_crc_t s_crc = HDLC_CRC_8;
 static char *s_port = nullptr;
 static bool s_generatorEnabled = false;
+static bool s_loopbackMode = true;
 static protocol_type_t s_protocol = protocol_type_t::HD;
 static int s_packetSize = 64;
 static int s_windowSize = 7;
@@ -48,12 +49,20 @@ static int s_sentBytes = 0;
 
 static int serial_send(void *p, const void *buf, int len)
 {
-    return SerialSend((uintptr_t)p, buf, len);
+#ifdef __linux__
+    return tiny_serial_send(reinterpret_cast<intptr_t>(p), buf, len);
+#else
+    return tiny_serial_send(reinterpret_cast<tiny_serial_handle_t>(p), buf, len);
+#endif
 }
 
 static int serial_receive(void *p, void *buf, int len)
 {
-    return SerialReceive((uintptr_t)p, buf, len);
+#ifdef __linux__
+    return tiny_serial_read(reinterpret_cast<intptr_t>(p), buf, len);
+#else
+    return tiny_serial_read(reinterpret_cast<tiny_serial_handle_t>(p), buf, len);
+#endif
 }
 
 static void print_help()
@@ -127,6 +136,7 @@ static int parse_args(int argc, char *argv[])
         else if ((!strcmp(argv[i],"-g")) || (!strcmp(argv[i],"--generator")))
         {
             s_generatorEnabled = true;
+            s_loopbackMode = !s_generatorEnabled;
         }
         else if ((!strcmp(argv[i],"-r")) || (!strcmp(argv[i],"--run-test")))
         {
@@ -182,19 +192,19 @@ static void onSendFrameHd(void *handle, uint16_t uid, uint8_t *pdata, int size)
     s_sentBytes += size;
 }
 
-static int run_hd(SerialHandle port)
+static int run_hd(tiny_serial_handle_t port)
 {
-    uint8_t inBuffer[s_packetSize * 2];
+    uint8_t* inBuffer = new uint8_t[s_packetSize * 2];
     STinyHdInit init{};
     STinyHdData tiny{};
-    memset( inBuffer, 0, sizeof(inBuffer) );
+    memset( inBuffer, 0, s_packetSize * 2);
     init.write_func       = serial_send;
     init.read_func        = serial_receive;
-    init.pdata            = (void *)port;
+    init.pdata            = reinterpret_cast<void *>(port);
     init.on_frame_cb      = onReceiveFrameHd;
     init.on_sent_cb       = onSendFrameHd;
     init.inbuf            = inBuffer;
-    init.inbuf_size       = sizeof(inBuffer);
+    init.inbuf_size       = s_packetSize * 2;
     init.timeout          = 100;
     init.crc_type         = s_crc;
     init.multithread_mode = 0;
@@ -230,12 +240,13 @@ static int run_hd(SerialHandle port)
         }
     }
     tiny_hd_close(&tiny);
+    delete[] inBuffer;
     return 0;
 }
 
 //================================== FD ======================================
 
-SerialHandle s_serialFd;
+tiny_serial_handle_t s_serialFd;
 Tiny::ProtoFdD *s_protoFd = nullptr;
 
 void onReceiveFrameFd(Tiny::IPacket &pkt)
@@ -252,17 +263,24 @@ void onReceiveFrameFd(Tiny::IPacket &pkt)
     }
 }
 
+void onSendFrameFd(Tiny::IPacket &pkt)
+{
+    if ( !s_runTest )
+        fprintf(stderr, ">>> Frame sent payload len=%d\n", (int)pkt.size() );
+    s_sentBytes += pkt.size();
+}
+
 static int serial_send_fd(void *p, const void *buf, int len)
 {
-    return SerialSend(s_serialFd, buf, len);
+    return tiny_serial_send(s_serialFd, buf, len);
 }
 
 static int serial_receive_fd(void *p, void *buf, int len)
 {
-    return SerialReceive(s_serialFd, buf, len);
+    return tiny_serial_read(s_serialFd, buf, len);
 }
 
-static int run_fd(SerialHandle port)
+static int run_fd(tiny_serial_handle_t port)
 {
     s_serialFd = port;
     Tiny::ProtoFdD proto( tiny_fd_buffer_size_by_mtu( s_packetSize, s_windowSize ) );
@@ -274,11 +292,12 @@ static int run_fd(SerialHandle port)
     // But in loopback mode (!generator), we must resend frames from receiveCallback as soon as possible, use no timeout then
     proto.setSendTimeout( s_generatorEnabled ? 1000: 0 );
     proto.setReceiveCallback( onReceiveFrameFd );
+    proto.setSendCallback( onSendFrameFd );
     s_protoFd = &proto;
 
     proto.begin( serial_send_fd, serial_receive_fd );
-    std::thread rxThread( [](Tiny::ProtoFdD &proto)->void { while (!s_terminate) proto.run_rx(100); }, std::ref(proto) );
-    std::thread txThread( [](Tiny::ProtoFdD &proto)->void { while (!s_terminate) proto.run_tx(100); }, std::ref(proto) );
+    std::thread rxThread( [](Tiny::ProtoFdD &proto)->void { while (!s_terminate) proto.run_rx(200); }, std::ref(proto) );
+    std::thread txThread( [](Tiny::ProtoFdD &proto)->void { while (!s_terminate) proto.run_tx(200); }, std::ref(proto) );
 
     auto startTs = std::chrono::steady_clock::now();
     auto progressTs = startTs;
@@ -293,10 +312,6 @@ static int run_fd(SerialHandle port)
             if ( proto.write( packet.data(), packet.size() ) < 0 )
             {
                 fprintf( stderr, "Failed to send packet\n" );
-            }
-            else
-            {
-                s_sentBytes += packet.size();
             }
         }
         else
@@ -322,7 +337,7 @@ static int run_fd(SerialHandle port)
 
 //================================== LIGHT ======================================
 
-static int run_light(SerialHandle port)
+static int run_light(tiny_serial_handle_t port)
 {
     s_serialFd = port;
     Tiny::ProtoLight proto;
@@ -389,9 +404,9 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    SerialHandle hPort = OpenSerial(s_port, SERIAL_115200);
+    tiny_serial_handle_t hPort = tiny_serial_open(s_port, 115200);
 
-    if ( hPort == INVALID_SERIAL )
+    if ( hPort == TINY_SERIAL_INVALID )
     {
         fprintf(stderr, "Error opening serial port\n");
         return 1;
@@ -409,7 +424,7 @@ int main(int argc, char *argv[])
         case protocol_type_t::LIGHT: result = run_light(hPort); break;
         default: fprintf(stderr, "Unknown protocol type"); break;
     }
-    CloseSerial(hPort);
+    tiny_serial_close(hPort);
     if ( s_runTest )
     {
         printf("\nRegistered TX speed: %u bps\n", (s_sentBytes) * 8 / 15);
